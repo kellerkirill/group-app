@@ -155,19 +155,37 @@ def generate_groups(n, all_p, genders, newbies=None, experts=None, roles=None, l
     raise RuntimeError(f"Сборка не удалась за {max_att} попыток. Seed: {used}")
 
 # ========================
-# STREAMLIT UI (НОВЫЙ)
+# STREAMLIT UI
 # ========================
 st.title("👥 Генератор групп")
-st.markdown("Добавьте участников в таблицу, укажите пол и роль. Конфликты задаются в поле ниже.")
 
 # Инициализация таблицы
 if "df" not in st.session_state:
     st.session_state.df = pd.DataFrame(columns=["Имя", "Пол", "Роль"])
 
+# 📋 Массовая вставка
+with st.expander("📋 Массовое добавление участников", expanded=True):
+    bulk_text = st.text_area("Вставьте список имён (каждое с новой строки)", key="bulk_input", height=80)
+    if st.button("➕ Добавить в таблицу", use_container_width=True):
+        names = [n.strip() for n in bulk_text.splitlines() if n.strip()]
+        if names:
+            existing = set(st.session_state.df["Имя"].dropna().str.strip().tolist())
+            unique_names = list(dict.fromkeys(names)) # сохраняет порядок, убирает дубли
+            to_add = [n for n in unique_names if n not in existing]
+            if to_add:
+                new_rows = pd.DataFrame({"Имя": to_add, "Пол": "M", "Роль": "regular"})
+                st.session_state.df = pd.concat([st.session_state.df, new_rows], ignore_index=True)
+                st.success(f"✅ Добавлено: {len(to_add)}")
+            else:
+                st.warning("Все имена уже есть в таблице.")
+        st.session_state.bulk_input = ""  # очистка поля после добавления
+
+# 📝 Основная таблица
+st.subheader("📝 Участники")
 edited_df = st.data_editor(
     st.session_state.df,
     column_config={
-        "Имя": st.column_config.TextColumn("Имя", required=True, help="Введите имя"),
+        "Имя": st.column_config.TextColumn("Имя", required=True),
         "Пол": st.column_config.SelectboxColumn("Пол", options=["M", "F"], required=True, default="M"),
         "Роль": st.column_config.SelectboxColumn("Роль", options=["regular", "newbie", "expert"], required=True, default="regular"),
     },
@@ -176,16 +194,13 @@ edited_df = st.data_editor(
     num_rows="dynamic",
     key="participants_table"
 )
-st.session_state.df = edited_df  # сохраняем изменения
+st.session_state.df = edited_df  # сохраняем ручные правки
 
-# Ограничения
-limits_txt = st.text_area(
-    "⚠️ Ограничения (каждая строка: `Имя: Имена_через_пробел`)",
-    placeholder="Иван: Петр Мария\nОлег: Анна",
-    height=80
-)
+# ⚠️ Ограничения
+limits_txt = st.text_area("⚠️ Конфликты (Имя: Запрещённые через пробел)", placeholder="Иван: Петр Мария", height=60)
 
-with st.expander("⚙️ Настройки"):
+# ⚙️ Настройки
+with st.expander("⚙️ Настройки генерации"):
     n = st.number_input("Количество групп", min_value=1, value=2)
     strict_r = st.checkbox("Строгий баланс ролей", value=True)
     strict_g = st.checkbox("Строгий баланс полов", value=True)
@@ -193,10 +208,9 @@ with st.expander("⚙️ Настройки"):
     run = st.button("🚀 Сгенерировать", type="primary", use_container_width=True)
 
 if run:
-    # Валидация
     valid_df = edited_df.dropna(subset=["Имя"])
     if valid_df.empty:
-        st.error("Таблица пуста. Добавьте хотя бы одного участника.")
+        st.error("Таблица пуста. Добавьте участников.")
         st.stop()
     names = valid_df["Имя"].str.strip().tolist()
     if len(set(names)) != len(names):
@@ -214,11 +228,8 @@ if run:
             limits[k.strip()] = [x.strip() for x in v.replace(",", " ").split() if x.strip()]
 
     try:
-        res = generate_groups(
-            n, names, genders, newbies, experts,
-            limits=limits, seed=int(seed) if seed else None,
-            strict_r=strict_r, strict_g=strict_g
-        )
+        res = generate_groups(n, names, genders, newbies, experts, limits=limits, 
+                              seed=int(seed) if seed else None, strict_r=strict_r, strict_g=strict_g)
         st.success(f"✅ Seed: {res.used_seed} | Попыток: {res.attempts}")
         if res.warnings: st.warning("⚠️ " + "; ".join(res.warnings))
         for i, g in enumerate(res.groups, 1):

@@ -1,57 +1,201 @@
 import streamlit as st
-from group_generator import generate_groups
+import random
+from collections import defaultdict
+from typing import List, Dict, Optional
+from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-def parse_list(text: str) -> list[str]:
-    return [x.strip() for x in text.replace(',', '\n').split('\n') if x.strip()]
+# ========================
+# ЛОГИКА ГЕНЕРАТОРА
+# ========================
+@dataclass
+class GroupingResult:
+    groups: List[List[str]]
+    attempts: int
+    status: str
+    warnings: List[str]
+    used_seed: int
+    balance_metrics: dict
 
-def parse_dict(text: str) -> dict[str, str]:
-    d = {}
-    for line in text.replace(',', '\n').split('\n'):
-        if ':' in line:
-            k, v = line.split(':', 1)
-            d[k.strip()] = v.strip()
+def verify_groups(groups, limits, roles, genders, strict_roles=True, strict_genders=True):
+    flat = [p for g in groups for p in g]
+    if len(flat) != len(set(flat)): return False
+    if max(len(g) for g in groups) - min(len(g) for g in groups) > 1: return False
+    conflicts = defaultdict(set)
+    for a, bs in limits.items():
+        for b in bs: conflicts[a].add(b)
+    for g in groups:
+        gs = set(g)
+        for p in g:
+            if conflicts[p] & gs: return False
+    n = len(groups)
+    if strict_roles:
+        rt = defaultdict(int)
+        for r in roles.values(): rt[r] += 1
+        tgt = {r: [b+(1 if i<e else 0) for i in range(n)] for r, c in rt.items() for b,e in [divmod(c,n)]}
+        for i, g in enumerate(groups):
+            gc = defaultdict(int)
+            for p in g: gc[roles[p]] += 1
+            for r in tgt:
+                if gc.get(r,0) != tgt[r][i]: return False
+    if strict_genders:
+        gt = defaultdict(int)
+        for g in genders.values(): gt[g] += 1
+        tgt = {g: [b+(1 if i<e else 0) for i in range(n)] for g, c in gt.items() for b,e in [divmod(c,n)]}
+        for i, g in enumerate(groups):
+            gc = defaultdict(int)
+            for p in g: gc[genders[p]] += 1
+            for g_type in tgt:
+                if gc.get(g_type,0) != tgt[g_type][i]: return False
+    return True
+
+def _run_attempt(seed, cfg):
+    rng = random.Random(seed)
+    all_p, roles, genders, conflicts = cfg['all'], cfg['roles'], cfg['genders'], cfg['conflicts']
+    size_tgt, role_tgt, gender_tgt = cfg['size_tgt'], cfg['role_tgt'], cfg['gender_tgt']
+    strict_r, strict_g, g_num = cfg['strict_r'], cfg['strict_g'], cfg['g_num']
+    pool = sorted(all_p, key=lambda p: len(conflicts[p]), reverse=True)
+    rng.shuffle(pool)
+    groups = [[] for _ in range(g_num)]
+    g_rc, g_gc = [defaultdict(int) for _ in range(g_num)], [defaultdict(int) for _ in range(g_num)]
+    warnings = []
+    for p in pool:
+        r, gn = roles[p], genders[p]
+        valid = [i for i in range(g_num) if len(groups[i]) < size_tgt[i] 
+                 and (not strict_r or g_rc[i][r] < role_tgt[r][i])
+                 and (not strict_g or g_gc[i][gn] < gender_tgt[gn][i])
+                 and not any(p in conflicts[m] for m in groups[i])]
+        if not valid:
+            if strict_r or strict_g:
+                valid = [i for i in range(g_num) if len(groups[i]) < size_tgt[i] and not any(p in conflicts[m] for m in groups[i])]
+                if valid and not warnings: warnings.append("Баланс ролей/полов ослаблен.")
+        if not valid: return None
+        idx = rng.choice(valid)
+        groups[idx].append(p); g_rc[idx][r] += 1; g_gc[idx][gn] += 1
+
+    def score():
+        dr = sum(sum(abs(g_rc[i][r]-role_tgt[r][i]) for r in role_tgt) for i in range(g_num))
+        dg = sum(sum(abs(g_gc[i][g]-gender_tgt[g][i]) for g in gender_tgt) for i in range(g_num))
+        return dr+dg
+    best, stag = score(), 0
+    for _ in range(150):
+        if stag >= 25: break
+        g1, g2 = rng.sample(range(g_num), 2)
+        if not groups[g1] or not groups[g2]: continue
+        p1, p2 = rng.choice(groups[g1]), rng.choice(groups[g2])
+        r1, r2, gn1, gn2 = roles[p1], roles[p2], genders[p1], genders[p2]
+        if any(p1 in conflicts[m] for m in groups[g2] if m!=p2): continue
+        if any(p2 in conflicts[m] for m in groups[g1] if m!=p1): continue
+        if strict_r and (g_rc[g2][r1]+1>role_tgt[r1][g2] or g_rc[g1][r2]+1>role_tgt[r2][g1]): continue
+        if strict_g and (g_gc[g2][gn1]+1>gender_tgt[gn1][g2] or g_gc[g1][gn2]+1>gender_tgt[gn2][g1]): continue
+        groups[g1].remove(p1); groups[g1].append(p2)
+        groups[g2].remove(p2); groups[g2].append(p1)
+        g_rc[g1][r1]-=1; g_rc[g1][r2]+=1; g_rc[g2][r2]-=1; g_rc[g2][r1]+=1
+        g_gc[g1][gn1]-=1; g_gc[g1][gn2]+=1; g_gc[g2][gn2]-=1; g_gc[g2][gn1]+=1
+        ns = score()
+        if ns < best: best, stag = ns, 0
+        elif ns == best:
+            if rng.random()<0.1: rng.shuffle(groups)
+            else: stag += 1
+        else:
+            groups[g1].remove(p2); groups[g1].append(p1)
+            groups[g2].remove(p1); groups[g2].append(p2)
+            g_rc[g1][r1]+=1; g_rc[g1][r2]-=1; g_rc[g2][r2]+=1; g_rc[g2][r1]-=1
+            g_gc[g1][gn1]+=1; g_gc[g1][gn2]-=1; g_gc[g2][gn2]+=1; g_gc[g2][gn1]-=1
+            stag += 1
+    n = len(groups)
+    bal = {"size_diff": max(len(g) for g in groups)-min(len(g) for g in groups),
+           "role_dev": {r:[g_rc[i][r]-role_tgt[r][i] for i in range(n)] for r in role_tgt},
+           "gender_dev": {g:[g_gc[i][g]-gender_tgt[g][i] for i in range(n)] for g in gender_tgt}}
+    return GroupingResult(groups, 1, "success", warnings, seed, bal)
+
+def generate_groups(n, all_p, genders, newbies=None, experts=None, roles=None, limits=None, seed=None, strict_r=True, strict_g=True, max_att=500, workers=0):
+    used = seed if seed is not None else random.randint(0, 2**32-1)
+    all_set = set(all_p)
+    if len(all_set)!=len(all_p): raise ValueError("Дубликаты в all_people.")
+    if len(all_p)<n: raise ValueError("Людей меньше, чем групп.")
+    if set(genders)!=all_set: raise ValueError("genders не покрывает all_people.")
+    if roles is None:
+        if newbies and experts and set(newbies)&set(experts): raise ValueError("newbies и experts пересекаются.")
+        roles = {p:'newbie' for p in (newbies or [])}
+        roles.update({p:'expert' for p in (experts or [])})
+        for p in all_p: roles.setdefault(p,'regular')
+    if set(roles)-all_set: raise ValueError("Неизвестные имена в roles.")
+    limits = limits or {}
+    conflicts = defaultdict(set)
+    for a, bs in limits.items():
+        if a not in all_set or not all(b in all_set for b in bs): raise ValueError("Невалидные имена в limits.")
+        for b in bs:
+            if a!=b: conflicts[a].add(b); conflicts[b].add(a)
+    base, ext = divmod(len(all_p), n)
+    size_tgt = [base+(1 if i<ext else 0) for i in range(n)]
+    max_sz = base+(1 if ext>0 else 0)
+    for p, cl in conflicts.items():
+        if len(cl)>=max_sz: raise RuntimeError(f"Конфликт '{p}' ({len(cl)}) > макс. размера группы ({max_sz}).")
+    rt = defaultdict(int)
+    for r in roles.values(): rt[r]+=1
+    role_tgt = {r:[b+(1 if i<e else 0) for i in range(n)] for r,c in rt.items() for b,e in [divmod(c,n)]}
+    gt = defaultdict(int)
+    for g in genders.values(): gt[g]+=1
+    gender_tgt = {g:[b+(1 if i<e else 0) for i in range(n)] for g,c in gt.items() for b,e in [divmod(c,n)]}
+    cfg = {'all':all_p,'roles':roles,'genders':genders,'conflicts':conflicts,'size_tgt':size_tgt,
+           'role_tgt':role_tgt,'gender_tgt':gender_tgt,'strict_r':strict_r,'strict_g':strict_g,'g_num':n}
+    seeds = [used+i for i in range(max_att)]
+    if workers>1:
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futs = {ex.submit(_run_attempt, s, cfg): i for i, s in enumerate(seeds)}
+            for f in as_completed(futs):
+                r = f.result()
+                if r: r.attempts=futs[f]+1; return r
+    else:
+        for i, s in enumerate(seeds):
+            r = _run_attempt(s, cfg)
+            if r: r.attempts=i+1; return r
+    raise RuntimeError(f"Сборка не удалась за {max_att} попыток. Seed: {used}")
+
+# ========================
+# STREAMLIT UI
+# ========================
+def parse_list(t): return [x.strip() for x in t.replace(',','\n').split('\n') if x.strip()]
+def parse_dict(t):
+    d={}
+    for l in t.replace(',','\n').split('\n'):
+        if ':' in l: k,v=l.split(':',1); d[k.strip()]=v.strip()
     return d
-
-def parse_limits(text: str) -> dict[str, list[str]]:
-    limits = {}
-    for line in text.replace(',', '\n').split('\n'):
-        if ':' in line:
-            k, vs = line.split(':', 1)
-            limits[k.strip()] = [v.strip() for v in vs.replace(',', ' ').split() if v.strip()]
-    return limits
+def parse_limits(t):
+    lim={}
+    for l in t.replace(',','\n').split('\n'):
+        if ':' in l: k,vs=l.split(':',1); lim[k.strip()]=[v.strip() for v in vs.replace(',',' ').split() if v.strip()]
+    return lim
 
 st.title("👥 Генератор групп")
-with st.form("gen_form"):
-    n = st.number_input("Групп", min_value=1, value=2)
-    all_p = st.text_area("Все участники (через запятую/строку)")
-    gnd = st.text_area("Полы (Имя:Пол)")
+with st.form("gen"):
+    n = st.number_input("Количество групп", min_value=1, value=2)
+    all_p = st.text_area("Все участники (через запятую или с новой строки)")
+    gnd = st.text_area("Полы (Имя:Пол, по одному на строку)")
     new = st.text_area("Новички")
     exp = st.text_area("Опытные")
-    lim = st.text_area("Ограничения (Имя: Запрещённые)")
-    strict_r = st.checkbox("Строгий баланс ролей", value=True)
-    strict_g = st.checkbox("Строгий баланс полов", value=True)
-    seed = st.number_input("Seed (опц.)", value=None)
-    go = st.form_submit_button("Сгенерировать")
+    lim = st.text_area("Ограничения (Имя: Недопустимые через пробел)")
+    sr = st.checkbox("Строгий баланс ролей", value=True)
+    sg = st.checkbox("Строгий баланс полов", value=True)
+    seed = st.number_input("Seed (опционально)", value=None, step=1)
+    run = st.form_submit_button("Сгенерировать")
 
-if go:
+if run:
     try:
         people = parse_list(all_p)
         if not people: st.error("Введите участников"); st.stop()
         genders = parse_dict(gnd)
         missing = set(people) - set(genders)
         if missing: st.error(f"Укажите пол для: {missing}"); st.stop()
-
-        res = generate_groups(
-            group_number=n, all_people=people, genders=genders,
-            newbies=parse_list(new), experts=parse_list(exp),
-            limits=parse_limits(lim), seed=int(seed) if seed else None,
-            strict_roles=strict_r, strict_genders=strict_g
-        )
+        res = generate_groups(n, people, genders, parse_list(new), parse_list(exp),
+                              limits=parse_limits(lim), seed=int(seed) if seed else None,
+                              strict_r=sr, strict_g=sg)
         st.success(f"✅ Seed: {res.used_seed} | Попыток: {res.attempts}")
         if res.warnings: st.warning("⚠️ " + "; ".join(res.warnings))
         for i, g in enumerate(res.groups, 1):
             st.subheader(f"Группа {i}")
-            st.write(g)
+            st.write(", ".join(g))
         st.json(res.balance_metrics)
     except Exception as e:
         st.error(f"❌ {e}")

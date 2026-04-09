@@ -159,32 +159,31 @@ def generate_groups(n, all_p, genders, newbies=None, experts=None, roles=None, l
 # ========================
 st.title("👥 Генератор групп")
 
-# Инициализация таблицы
-if "df" not in st.session_state:
-    st.session_state.df = pd.DataFrame(columns=["Имя", "Пол", "Роль"])
+# Инициализация таблицы через ключ сессии
+if "participants_table" not in st.session_state:
+    st.session_state["participants_table"] = pd.DataFrame(columns=["Имя", "Пол", "Роль"])
 
 # 📋 Массовая вставка
 with st.expander("📋 Массовое добавление участников", expanded=True):
-    # Убрали key="bulk_input", чтобы избежать конфликта с session_state
     bulk_text = st.text_area("Вставьте список имён (каждое с новой строки)", height=80)
     if st.button("➕ Добавить в таблицу", use_container_width=True):
         names = [n.strip() for n in bulk_text.splitlines() if n.strip()]
         if names:
-            existing = set(st.session_state.df["Имя"].dropna().str.strip().tolist())
+            current_df = st.session_state["participants_table"]
+            existing = set(current_df["Имя"].dropna().str.strip().tolist())
             unique_names = list(dict.fromkeys(names))
             to_add = [n for n in unique_names if n not in existing]
             if to_add:
                 new_rows = pd.DataFrame({"Имя": to_add, "Пол": "M", "Роль": "regular"})
-                st.session_state.df = pd.concat([st.session_state.df, new_rows], ignore_index=True)
+                st.session_state["participants_table"] = pd.concat([current_df, new_rows], ignore_index=True)
                 st.success(f"✅ Добавлено: {len(to_add)}")
-                # Опционально: можно очистить поле через st.rerun(), но оставим текст для удобства копирования
             else:
                 st.warning("Все имена уже есть в таблице.")
 
 # 📝 Основная таблица
 st.subheader("📝 Участники")
 edited_df = st.data_editor(
-    st.session_state.df,
+    st.session_state["participants_table"],
     column_config={
         "Имя": st.column_config.TextColumn("Имя", required=True),
         "Пол": st.column_config.SelectboxColumn("Пол", options=["M", "F"], required=True, default="M"),
@@ -193,9 +192,8 @@ edited_df = st.data_editor(
     hide_index=True,
     use_container_width=True,
     num_rows="dynamic",
-    key="participants_table"
+    key="participants_table"  # ✅ Автоматически сохраняет состояние и позицию скролла
 )
-st.session_state.df = edited_df
 
 # ⚠️ Ограничения
 limits_txt = st.text_area("⚠️ Конфликты (Имя: Запрещённые через пробел)", placeholder="Иван: Петр Мария", height=60)

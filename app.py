@@ -192,7 +192,7 @@ edited_df = st.data_editor(
     hide_index=True,
     use_container_width=True,
     num_rows="dynamic",
-    key="participants_table"  # ✅ Автоматически сохраняет состояние и позицию скролла
+    key="participants_table"
 )
 
 # ⚠️ Ограничения
@@ -204,7 +204,10 @@ with st.expander("⚙️ Настройки генерации"):
     strict_r = st.checkbox("Строгий баланс ролей", value=True)
     strict_g = st.checkbox("Строгий баланс полов", value=True)
     seed = st.number_input("Seed (опционально)", value=None, step=1)
-    run = st.button("🚀 Сгенерировать", type="primary", use_container_width=True)
+
+# 🚀 Кнопка вынесена вниз
+st.markdown("---")
+run = st.button("🚀 Сгенерировать", type="primary", use_container_width=True)
 
 if run:
     valid_df = edited_df.dropna(subset=["Имя"])

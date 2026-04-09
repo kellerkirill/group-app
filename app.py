@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import io
 import random
 from collections import defaultdict
 from typing import List, Dict, Optional
@@ -125,7 +126,7 @@ def generate_groups(n, all_p, genders, newbies=None, experts=None, roles=None, l
     limits = limits or {}
     conflicts = defaultdict(set)
     for a, bs in limits.items():
-        if a not in all_set or not all(b in all_set for b in bs): raise ValueError(f"Имя '{a}' или один из запрещённых партнёров отсутствуют в списке участников.")
+        if a not in all_set or not all(b in all_set for b in bs): raise ValueError(f"Имя '{a}' или партнёр отсутствуют в списке резидентов.")
         for b in bs:
             if a!=b: conflicts[a].add(b); conflicts[b].add(a)
     base, ext = divmod(len(all_p), n)
@@ -155,7 +156,7 @@ def generate_groups(n, all_p, genders, newbies=None, experts=None, roles=None, l
     raise RuntimeError(f"Сборка не удалась за {max_att} попыток. Seed: {used}")
 
 # ========================
-# БАЗА ИМЁН & ОПРЕДЕЛЕНИЕ ПОЛА (МУЛЬТИ-СЛОВА)
+# БАЗА ИМЁН & ОПРЕДЕЛЕНИЕ ПОЛА
 # ========================
 _RU_NAMES = {
     'александр':'M','саша':'M','саня':'M','дима':'M','димка':'M','николай':'M','коля':'M',
@@ -176,87 +177,130 @@ _RU_NAMES = {
     'костя':'M','леонид':'M','лёня':'M','марат':'M','мирон':'M','назар':'M','никита':'M',
     'нестор':'M','платон':'M','потап':'M','прохор':'M','радик':'M','руслан':'M','савелий':'M',
     'серёжа':'M','станислав':'M','терентий':'M','трофим':'M','устин':'M','фёдор':'M','федор':'M',
-    'александра':'F','алёна':'F','алена':'F','алиса':'F','алла':'F','альбина':'F','амелия':'F',
-    'анастасия':'F','настя':'F','анжела':'F','анжелика':'F','анна':'F','анюта':'F','антонина':'F',
-    'арина':'F','белла':'F','валентина':'F','валя':'F','валерия':'F','лера':'F','василиса':'F',
-    'вера':'F','вероника':'F','вика':'F','виктория':'F','виолетта':'F','влада':'F','галина':'F',
-    'галя':'F','дарья':'F','даша':'F','диана':'F','дина':'F','евгения':'F','женя':'F',
-    'евдокия':'F','дуня':'F','екатерина':'F','катя':'F','елена':'F','лена':'F','елизавета':'F',
-    'лиза':'F','жанна':'F','злата':'F','зина':'F','зинаида':'F','зоя':'F','инга':'F','инна':'F',
-    'ирина':'F','ира':'F','камила':'F','карина':'F','кира':'F','клара':'F','ксения':'F',
-    'ксюша':'F','лариса':'F','лара':'F','лида':'F','лидия':'F','лилия':'F','лина':'F',
-    'люба':'F','любовь':'F','люда':'F','людмила':'F','люся':'F','майя':'F','маргарита':'F',
-    'марина':'F','мария':'F','маша':'F','милана':'F','мира':'F','надежда':'F','надя':'F',
-    'наина':'F','наталия':'F','наташа':'F','нелли':'F','ника':'F','нина':'F','оксана':'F',
-    'оля':'F','ольга':'F','поля':'F','полина':'F','раиса':'F','роза':'F','света':'F',
-    'светлана':'F','сима':'F','симона':'F','соня':'F','софа':'F','софья':'F','стелла':'F',
-    'таня':'F','татьяна':'F','тина':'F','уля':'F','ульяна':'F','фаина':'F','эвелина':'F',
-    'эльвира':'F','эмма':'F','юлия':'F','юля':'F','юнона':'F','яна':'F','янина':'F','ярослава':'F'
+    'александра':'F','алёна':'F','алена':'F','алина':'F','алиса':'F','алла':'F','альбина':'F',
+    'амелия':'F','анастасия':'F','настя':'F','анжела':'F','анжелика':'F','анна':'F','анюта':'F',
+    'антонина':'F','арина':'F','белла':'F','валентина':'F','валя':'F','валерия':'F','лера':'F',
+    'василиса':'F','вера':'F','вероника':'F','вика':'F','виктория':'F','виолетта':'F','влада':'F',
+    'галина':'F','галя':'F','дарья':'F','даша':'F','дарина':'F','диана':'F','дина':'F',
+    'евгения':'F','женя':'F','евдокия':'F','дуня':'F','екатерина':'F','катя':'F','елена':'F',
+    'лена':'F','елизавета':'F','лиза':'F','элли':'F','жанна':'F','злата':'F','зина':'F',
+    'зинаида':'F','зоя':'F','инга':'F','инна':'F','ирина':'F','ира':'F','камила':'F','карина':'F',
+    'кира':'F','клара':'F','ксения':'F','ксюша':'F','лариса':'F','лара':'F','лида':'F','лидия':'F',
+    'лилия':'F','лина':'F','люба':'F','любовь':'F','люда':'F','людмила':'F','люся':'F','майя':'F',
+    'маргарита':'F','марина':'F','мария':'F','маша':'F','милана':'F','мила':'F','мира':'F',
+    'надежда':'F','надя':'F','наина':'F','наталия':'F','наташа':'F','нелли':'F','ника':'F',
+    'нина':'F','оксана':'F','оксана':'F','оля':'F','ольга':'F','поля':'F','полина':'F','раиса':'F',
+    'роза':'F','света':'F','светлана':'F','сима':'F','симона':'F','соня':'F','софа':'F','софия':'F',
+    'софья':'F','стелла':'F','таня':'F','татьяна':'F','тина':'F','уля':'F','ульяна':'F','фаина':'F',
+    'эвелина':'F','эльвира':'F','эмма':'F','юлия':'F','юля':'F','юнона':'F','яна':'F','янина':'F',
+    'ярослава':'F','ева':'F','кира':'F','мира':'F','таисия':'F','тая':'F','варвара':'F','варя':'F',
+    'агата':'F','аделина':'F','агнесса':'F','аглая':'F','ада':'F','аида':'F','аксинья':'F',
+    'албена':'F','алёна':'F','алексина':'F','алина':'F','алиса':'F','алла':'F','альбина':'F',
+    'амалия':'F','амелия':'F','ангелина':'F','анисья':'F','анна':'F','антигона':'F','антонина':'F',
+    'анфиса':'F','арина':'F','ася':'F','афанасия':'F','аэлита':'F','беатриса':'F','белла':'F',
+    'берта':'F','божена':'F','бронислава':'F','валентина':'F','валерия':'F','ванесса':'F','варвара':'F',
+    'василиса':'F','валя':'F','вера':'F','вероника':'F','вика':'F','виолетта':'F','вита':'F',
+    'виталина':'F','влада':'F','власта':'F','волга':'F','всеслава':'F','галина':'F','галя':'F',
+    'гелена':'F','генриетта':'F','глафира':'F','глаша':'F','глория':'F','голена':'F','грета':'F',
+    'дарина':'F','дарья':'F','даша':'F','джанна':'F','диана':'F','динора':'F','дина':'F',
+    'евдокия':'F','евгения':'F','екатерина':'F','елена':'F','елизавета':'F','женя':'F','жульетта':'F',
+    'зара':'F','звенислава':'F','земфира':'F','зинаида':'F','злата':'F','зоя':'F','ива':'F',
+    'изабелла':'F','изольда':'F','ильмира':'F','ильса':'F','ильяна':'F','инга':'F','инесса':'F',
+    'инна':'F','иоланта':'F','ипполита':'F','ираида':'F','ирина':'F','исаура':'F','исидора':'F',
+    'иулиания':'F','капитолина':'F','карина':'F','карла':'F','кармен':'F','каролина':'F','кира':'F',
+    'кирилла':'F','кира':'F','клара':'F','клавдия':'F','клара':'F','клеопатра':'F','констанция':'F',
+    'кристина':'F','ксения':'F','куба':'F','лада':'F','лариса':'F','лера':'F','леона':'F',
+    'лиана':'F','либерия':'F','лидия':'F','лиза':'F','лилия':'F','лина':'F','лира':'F',
+    'лова':'F','лола':'F','луиза':'F','луна':'F','любава':'F','любовь':'F','людмила':'F',
+    'майя':'F','маланья':'F','маргарита':'F','марианна':'F','марина':'F','мария':'F','марта':'F',
+    'марфа':'F','марьяна':'F','маша':'F','мелания':'F','милана':'F','милена':'F','милослава':'F',
+    'мина':'F','мира':'F','мирослава':'F','муза':'F','надежда':'F','наина':'F','настя':'F',
+    'наталия':'F','наталия':'F','наталья':'F','нелли':'F','ника':'F','нина':'F','нинель':'F',
+    'нона':'F','олимпиада':'F','оля':'F','ольга':'F','пелагея':'F','полина':'F','прасковья':'F',
+    'рада':'F','раиса':'F','регина':'F','римма':'F','роза':'F','рославля':'F','руфина':'F',
+    'светлана':'F','серафима':'F','сима':'F','симона':'F','сна':'F','снежана':'F','софья':'F',
+    'стася':'F','стелла':'F','степанида':'F','сусанна':'F','таисия':'F','тамара':'F','таня':'F',
+    'тата':'F','таша':'F','татьяна':'F','тереза':'F','ульяна':'F','уля':'F','фатима':'F',
+    'феодора':'F','феофания':'F','флора':'F','харита':'F','христина':'F','цао':'F','цезария':'F',
+    'целина':'F','цифрина':'F','челси':'F','шахерезада':'F','элвира':'F','элена':'F','эмилия':'F',
+    'эмма':'F','эрика':'F','эсмеральда':'F','эсфирь':'F','юлиана':'F','юлия':'F','юнона':'F',
+    'янна':'F','яна':'F','ярослава':'F','янина':'F'
 }
 
 def detect_gender(name: str) -> str:
-    """Определяет пол по первому слову имени. По умолчанию 'M'."""
-    first_word = name.strip().split()[0].lower().rstrip('.,!?:;')
-    return _RU_NAMES.get(first_word, 'M')
+    first = name.strip().split()[0].lower().rstrip('.,!?:;')
+    return _RU_NAMES.get(first, 'M')
 
 # ========================
 # STREAMLIT UI
 # ========================
-st.title("👥 Генератор групп")
+st.set_page_config(page_title="РАСХОДИМСЯ ПО ГРУППАМ!", layout="wide")
+st.title("🔥 РАСХОДИМСЯ ПО ГРУППАМ!")
 
-DATA_KEY = "participants_data"
-EDITOR_KEY = "participants_editor"
-
-if DATA_KEY not in st.session_state:
-    st.session_state[DATA_KEY] = pd.DataFrame(columns=["Имя", "Пол", "Роль"])
+TABLE_KEY = "residents_table"
+if TABLE_KEY not in st.session_state:
+    st.session_state[TABLE_KEY] = pd.DataFrame(columns=["Имя", "Пол", "Роль", "🚦 Статус"])
 
 # 📋 Массовая вставка
-with st.expander("📋 Массовое добавление участников", expanded=True):
-    bulk_text = st.text_area("Вставьте список имён (каждое с новой строки, допускаются фамилии/инициалы)", height=80)
+with st.expander("📋 Массовое добавление резидентов", expanded=True):
+    bulk_text = st.text_area("Вставьте список имён (каждое с новой строки)", height=80)
     if st.button("➕ Добавить в таблицу", use_container_width=True):
         names = [n.strip() for n in bulk_text.splitlines() if n.strip()]
         if names:
-            current_df = st.session_state[DATA_KEY]
+            current_df = st.session_state[TABLE_KEY]
             existing = set(current_df["Имя"].dropna().str.strip().tolist())
             unique_names = list(dict.fromkeys(names))
             to_add = [n for n in unique_names if n not in existing]
             if to_add:
-                new_rows = pd.DataFrame({
-                    "Имя": to_add,
-                    "Пол": [detect_gender(n) for n in to_add],
-                    "Роль": "regular"
-                })
-                st.session_state[DATA_KEY] = pd.concat([current_df, new_rows], ignore_index=True)
+                genders = [detect_gender(n) for n in to_add]
+                statuses = ["✅ Определён" if detect_gender(n) in _RU_NAMES.get(n.strip().split()[0].lower().rstrip('.,!?:;'), '') else "🔴 Не определён" for n in to_add]
+                # Корректная проверка статуса
+                statuses = []
+                for n in to_add:
+                    first = n.strip().split()[0].lower().rstrip('.,!?:;')
+                    statuses.append("✅ Определён" if first in _RU_NAMES else "🔴 Не определён")
+                    
+                new_rows = pd.DataFrame({"Имя": to_add, "Пол": genders, "Роль": "regular", "🚦 Статус": statuses})
+                st.session_state[TABLE_KEY] = pd.concat([current_df, new_rows], ignore_index=True)
                 st.success(f"✅ Добавлено: {len(to_add)}")
             else:
                 st.warning("Все имена уже есть в таблице.")
 
-# 🔍 Авто-определение для существующих
-if st.button("🔍 Авто-определить пол у всех участников", type="secondary", use_container_width=True):
-    df = st.session_state[DATA_KEY].copy()
+# 🔍 Авто-определение пола
+if st.button("🔍 Авто-определить пол у всех", type="secondary", use_container_width=True):
+    df = st.session_state[TABLE_KEY].copy()
     if not df.empty:
         df["Пол"] = df["Имя"].astype(str).apply(detect_gender)
-        st.session_state[DATA_KEY] = df
+        df["🚦 Статус"] = df["Имя"].apply(lambda n: "✅ Определён" if n.strip().split()[0].lower().rstrip('.,!?:;') in _RU_NAMES else "🔴 Не определён")
+        st.session_state[TABLE_KEY] = df.reset_index(drop=True)
         st.rerun()
 
-# 📝 Основная таблица
-st.subheader("📝 Участники")
-edited_df = st.data_editor(
-    st.session_state[DATA_KEY],
+# 📝 Таблица резидентов
+st.subheader("📝 Резиденты")
+st.markdown("""
+<style>
+/* Подсветка строк с неопределённым полом */
+div[data-testid="stDataEditor"] table tr:has(td:contains("🔴")) { background-color: #ffcccc !important; }
+</style>
+""", unsafe_allow_html=True)
+
+st.data_editor(
+    st.session_state[TABLE_KEY],
     column_config={
-        "Имя": st.column_config.TextColumn("Имя", required=True),
+        "Имя": st.column_config.TextColumn("Имя", required=True, disabled=False),
         "Пол": st.column_config.SelectboxColumn("Пол", options=["M", "F"], required=True, default="M"),
         "Роль": st.column_config.SelectboxColumn("Роль", options=["regular", "newbie", "expert"], required=True, default="regular"),
+        "🚦 Статус": st.column_config.TextColumn("Статус", width="small", disabled=True),
     },
     hide_index=True,
     use_container_width=True,
     num_rows="dynamic",
-    key=EDITOR_KEY
+    key=TABLE_KEY
 )
-st.session_state[DATA_KEY] = edited_df
 
-# ⚠️ Ограничения (Запятая как разделитель для поддержки составных имён)
-limits_txt = st.text_area("⚠️ Конфликты (Имя: Запрещённые через запятую)", placeholder="Олег С: Леша Ч, Иван П", height=60)
+# ⚠️ Границы
+st.subheader("🌍 Границы")
+limits_txt = st.text_area("Укажите, кто не должен быть в одной группе (Имя: Через запятую)", placeholder="Олег С: Леша Ч, Иван П\nАня К: Петя О, Маша И", height=240)
 
 # ⚙️ Настройки
 with st.expander("⚙️ Настройки генерации"):
@@ -267,12 +311,13 @@ with st.expander("⚙️ Настройки генерации"):
 
 # 🚀 Кнопка внизу
 st.markdown("---")
-run = st.button("🚀 Сгенерировать", type="primary", use_container_width=True)
+run = st.button("🚀 РАСПРЕДЕЛИТЬ!", type="primary", use_container_width=True)
 
 if run:
-    valid_df = edited_df.dropna(subset=["Имя"])
+    df = st.session_state.get(TABLE_KEY, pd.DataFrame())
+    valid_df = df.dropna(subset=["Имя"])
     if valid_df.empty:
-        st.error("Таблица пуста. Добавьте участников.")
+        st.error("Таблица пуста. Добавьте резидентов.")
         st.stop()
     names = valid_df["Имя"].str.strip().tolist()
     if len(set(names)) != len(names):
@@ -289,18 +334,29 @@ if run:
             k, v = line.split(":", 1)
             k_clean = k.strip()
             if not k_clean: continue
-            # Разделяем запятыми для корректной работы с именами из нескольких слов
-            forbidden = [x.strip() for x in v.split(',') if x.strip()]
-            limits[k_clean] = forbidden
+            limits[k_clean] = [x.strip() for x in v.split(',') if x.strip()]
 
     try:
         res = generate_groups(n, names, genders, newbies, experts, limits=limits, 
                               seed=int(seed) if seed else None, strict_r=strict_r, strict_g=strict_g)
         st.success(f"✅ Seed: {res.used_seed} | Попыток: {res.attempts}")
         if res.warnings: st.warning("⚠️ " + "; ".join(res.warnings))
+        
         for i, g in enumerate(res.groups, 1):
-            st.subheader(f"Группа {i}")
+            st.subheader(f"Группа {i} ({len(g)} чел.)")
             st.write(", ".join(g))
-        st.json(res.balance_metrics)
+            
+        # 📥 Экспорт в Excel
+        if res.groups:
+            excel_data = []
+            for i, g in enumerate(res.groups, 1):
+                excel_data.append({"Группа": f"Группа {i} ({len(g)} чел.)", "Резиденты": ", ".join(g)})
+            df_export = pd.DataFrame(excel_data)
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                df_export.to_excel(writer, index=False, sheet_name="Группы")
+            output.seek(0)
+            st.download_button("📥 Скачать результат в Excel", data=output, file_name="groups_result.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            
     except Exception as e:
         st.error(f"❌ {e}")

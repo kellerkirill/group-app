@@ -230,21 +230,26 @@ def detect_gender(name: str) -> str:
     return _RU_NAMES.get(first, 'M')
 
 # ========================
-# STREAMLIT UI
+# STREAMLIT UI (ИСПРАВЛЕННЫЙ)
 # ========================
 st.set_page_config(page_title="РАСХОДИМСЯ ПО ГРУППАМ!", layout="wide")
 st.title("🔥 РАСХОДИМСЯ ПО ГРУППАМ!")
 
-TABLE_KEY = "residents_table"
-# Инициализация один раз
-if TABLE_KEY not in st.session_state:
-    st.session_state[TABLE_KEY] = pd.DataFrame(columns=["Имя", "Пол", "Роль", "🚦 Статус"])
+# 🔑 Разделяем ключи: DATA_KEY для логики, EDITOR_KEY для виджета
+DATA_KEY = "residents_data"
+EDITOR_KEY = "residents_editor"
+
+if DATA_KEY not in st.session_state:
+    st.session_state[DATA_KEY] = pd.DataFrame(columns=["Имя", "Пол", "Роль", "🚦 Статус"])
 else:
     # Миграция старых ролей
     role_map = {"regular": "Обычный", "expert": "ВПИ", "newbie": "Новичок"}
-    df_temp = st.session_state[TABLE_KEY]
-    if "Роль" in df_temp.columns:
-        df_temp["Роль"] = df_temp["Роль"].replace(role_map)
+    if "Роль" in st.session_state[DATA_KEY].columns:
+        st.session_state[DATA_KEY]["Роль"] = st.session_state[DATA_KEY]["Роль"].replace(role_map)
+
+# Синхронизация при инициализации виджета
+if EDITOR_KEY not in st.session_state:
+    st.session_state[EDITOR_KEY] = st.session_state[DATA_KEY].copy()
 
 # 📋 Массовая вставка
 with st.expander("📋 Массовое добавление резидентов", expanded=True):
@@ -252,7 +257,7 @@ with st.expander("📋 Массовое добавление резиденто�
     if st.button("➕ Добавить в таблицу", use_container_width=True):
         names = [n.strip() for n in bulk_text.splitlines() if n.strip()]
         if names:
-            existing = set(st.session_state[TABLE_KEY]["Имя"].dropna().str.strip().tolist())
+            existing = set(st.session_state[DATA_KEY]["Имя"].dropna().str.strip().tolist())
             unique_names = list(dict.fromkeys(names))
             to_add = [n for n in unique_names if n not in existing]
             if to_add:
@@ -262,7 +267,8 @@ with st.expander("📋 Массовое добавление резиденто�
                     genders.append(_RU_NAMES.get(first, 'M'))
                     statuses.append("✅" if first in _RU_NAMES else "🔴 Не определён")
                 new_rows = pd.DataFrame({"Имя": to_add, "Пол": genders, "Роль": "Обычный", "🚦 Статус": statuses})
-                st.session_state[TABLE_KEY] = pd.concat([st.session_state[TABLE_KEY], new_rows], ignore_index=True)
+                st.session_state[DATA_KEY] = pd.concat([st.session_state[DATA_KEY], new_rows], ignore_index=True)
+                st.session_state[EDITOR_KEY] = st.session_state[DATA_KEY].copy()
                 st.success(f"✅ Добавлено: {len(to_add)}")
                 st.rerun()
             else:
@@ -270,24 +276,25 @@ with st.expander("📋 Массовое добавление резиденто�
 
 # 🔍 Авто-определение пола
 if st.button("🔍 Авто-определить пол у всех", type="secondary", use_container_width=True):
-    df = st.session_state[TABLE_KEY].copy()
+    df = st.session_state[DATA_KEY].copy()
     if not df.empty:
         df["Пол"] = df["Имя"].astype(str).apply(detect_gender)
         df["🚦 Статус"] = df["Имя"].apply(lambda n: "✅" if n.strip().split()[0].lower().rstrip('.,!?:;') in _RU_NAMES else "🔴 Не определён")
-        st.session_state[TABLE_KEY] = df.reset_index(drop=True)
+        st.session_state[DATA_KEY] = df.reset_index(drop=True)
+        st.session_state[EDITOR_KEY] = st.session_state[DATA_KEY].copy()
         st.rerun()
 
 # ⚠️ Предупреждение
-current_df = st.session_state[TABLE_KEY]
+current_df = st.session_state[DATA_KEY]
 if "🚦 Статус" in current_df.columns:
     undetected = current_df[current_df["🚦 Статус"].str.contains("🔴", na=False)]
     if not undetected.empty:
         st.warning(f"🔴 Проверьте вручную: {', '.join(undetected['Имя'])}")
 
-# 📝 Таблица резидентов (БЕЗ ручной синхронизации!)
+# 📝 Таблица резидентов
 st.subheader("📝 Резиденты")
 st.data_editor(
-    st.session_state[TABLE_KEY].copy(),  # .copy() обходит ошибку идентичности
+    st.session_state[DATA_KEY].copy(),  # Передаём копию, чтобы избежать проверки идентичности
     column_config={
         "Имя": st.column_config.TextColumn("Имя", required=True),
         "Пол": st.column_config.SelectboxColumn("Пол", options=["M", "F"], required=True, default="M"),
@@ -297,9 +304,9 @@ st.data_editor(
     hide_index=True,
     use_container_width=True,
     num_rows="dynamic",
-    key=TABLE_KEY
+    key=EDITOR_KEY  # ⚠️ Отличается от DATA_KEY → ошибка исчезает
 )
-# ⛔ УБРАНО: st.session_state[TABLE_KEY] = edited_df -> это ломало скролл и сбрасывало значения
+# ⛔ УБРАНО: ручная синхронизация st.session_state[DATA_KEY] = edited_df
 
 # 🌍 Границы
 st.subheader("🌍 Границы")
@@ -321,7 +328,8 @@ st.markdown("---")
 run = st.button("🚀 РАСПРЕДЕЛИТЬ!", type="primary", use_container_width=True)
 
 if run:
-    df = st.session_state.get(TABLE_KEY, pd.DataFrame())
+    # Читаем актуальное состояние напрямую из виджета
+    df = st.session_state.get(EDITOR_KEY, st.session_state.get(DATA_KEY, pd.DataFrame()))
     valid_df = df.dropna(subset=["Имя"])
     if valid_df.empty:
         st.error("Таблица пуста. Добавьте резидентов.")

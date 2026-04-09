@@ -1,4 +1,5 @@
 import streamlit as st
+import pandas as pd
 import random
 from collections import defaultdict
 from typing import List, Dict, Optional
@@ -17,7 +18,7 @@ class GroupingResult:
     used_seed: int
     balance_metrics: dict
 
-def verify_groups(groups, limits, roles, genders, strict_roles=True, strict_genders=True):
+def verify_groups(groups, limits, roles, genders, strict_r=True, strict_g=True):
     flat = [p for g in groups for p in g]
     if len(flat) != len(set(flat)): return False
     if max(len(g) for g in groups) - min(len(g) for g in groups) > 1: return False
@@ -29,7 +30,7 @@ def verify_groups(groups, limits, roles, genders, strict_roles=True, strict_gend
         for p in g:
             if conflicts[p] & gs: return False
     n = len(groups)
-    if strict_roles:
+    if strict_r:
         rt = defaultdict(int)
         for r in roles.values(): rt[r] += 1
         tgt = {r: [b+(1 if i<e else 0) for i in range(n)] for r, c in rt.items() for b,e in [divmod(c,n)]}
@@ -38,7 +39,7 @@ def verify_groups(groups, limits, roles, genders, strict_roles=True, strict_gend
             for p in g: gc[roles[p]] += 1
             for r in tgt:
                 if gc.get(r,0) != tgt[r][i]: return False
-    if strict_genders:
+    if strict_g:
         gt = defaultdict(int)
         for g in genders.values(): gt[g] += 1
         tgt = {g: [b+(1 if i<e else 0) for i in range(n)] for g, c in gt.items() for b,e in [divmod(c,n)]}
@@ -154,43 +155,70 @@ def generate_groups(n, all_p, genders, newbies=None, experts=None, roles=None, l
     raise RuntimeError(f"Сборка не удалась за {max_att} попыток. Seed: {used}")
 
 # ========================
-# STREAMLIT UI
+# STREAMLIT UI (НОВЫЙ)
 # ========================
-def parse_list(t): return [x.strip() for x in t.replace(',','\n').split('\n') if x.strip()]
-def parse_dict(t):
-    d={}
-    for l in t.replace(',','\n').split('\n'):
-        if ':' in l: k,v=l.split(':',1); d[k.strip()]=v.strip()
-    return d
-def parse_limits(t):
-    lim={}
-    for l in t.replace(',','\n').split('\n'):
-        if ':' in l: k,vs=l.split(':',1); lim[k.strip()]=[v.strip() for v in vs.replace(',',' ').split() if v.strip()]
-    return lim
-
 st.title("👥 Генератор групп")
-with st.form("gen"):
+st.markdown("Добавьте участников в таблицу, укажите пол и роль. Конфликты задаются в поле ниже.")
+
+# Инициализация таблицы
+if "df" not in st.session_state:
+    st.session_state.df = pd.DataFrame(columns=["Имя", "Пол", "Роль"])
+
+edited_df = st.data_editor(
+    st.session_state.df,
+    column_config={
+        "Имя": st.column_config.TextColumn("Имя", required=True, help="Введите имя"),
+        "Пол": st.column_config.SelectboxColumn("Пол", options=["M", "F"], required=True, default="M"),
+        "Роль": st.column_config.SelectboxColumn("Роль", options=["regular", "newbie", "expert"], required=True, default="regular"),
+    },
+    hide_index=True,
+    use_container_width=True,
+    num_rows="dynamic",
+    key="participants_table"
+)
+st.session_state.df = edited_df  # сохраняем изменения
+
+# Ограничения
+limits_txt = st.text_area(
+    "⚠️ Ограничения (каждая строка: `Имя: Имена_через_пробел`)",
+    placeholder="Иван: Петр Мария\nОлег: Анна",
+    height=80
+)
+
+with st.expander("⚙️ Настройки"):
     n = st.number_input("Количество групп", min_value=1, value=2)
-    all_p = st.text_area("Все участники (через запятую или с новой строки)")
-    gnd = st.text_area("Полы (Имя:Пол, по одному на строку)")
-    new = st.text_area("Новички")
-    exp = st.text_area("Опытные")
-    lim = st.text_area("Ограничения (Имя: Недопустимые через пробел)")
-    sr = st.checkbox("Строгий баланс ролей", value=True)
-    sg = st.checkbox("Строгий баланс полов", value=True)
+    strict_r = st.checkbox("Строгий баланс ролей", value=True)
+    strict_g = st.checkbox("Строгий баланс полов", value=True)
     seed = st.number_input("Seed (опционально)", value=None, step=1)
-    run = st.form_submit_button("Сгенерировать")
+    run = st.button("🚀 Сгенерировать", type="primary", use_container_width=True)
 
 if run:
+    # Валидация
+    valid_df = edited_df.dropna(subset=["Имя"])
+    if valid_df.empty:
+        st.error("Таблица пуста. Добавьте хотя бы одного участника.")
+        st.stop()
+    names = valid_df["Имя"].str.strip().tolist()
+    if len(set(names)) != len(names):
+        st.error("В таблице есть дубликаты имён.")
+        st.stop()
+        
+    genders = dict(zip(valid_df["Имя"].str.strip(), valid_df["Пол"]))
+    newbies = valid_df[valid_df["Роль"]=="newbie"]["Имя"].str.strip().tolist()
+    experts = valid_df[valid_df["Роль"]=="expert"]["Имя"].str.strip().tolist()
+    
+    limits = {}
+    for line in limits_txt.splitlines():
+        if ":" in line:
+            k, v = line.split(":", 1)
+            limits[k.strip()] = [x.strip() for x in v.replace(",", " ").split() if x.strip()]
+
     try:
-        people = parse_list(all_p)
-        if not people: st.error("Введите участников"); st.stop()
-        genders = parse_dict(gnd)
-        missing = set(people) - set(genders)
-        if missing: st.error(f"Укажите пол для: {missing}"); st.stop()
-        res = generate_groups(n, people, genders, parse_list(new), parse_list(exp),
-                              limits=parse_limits(lim), seed=int(seed) if seed else None,
-                              strict_r=sr, strict_g=sg)
+        res = generate_groups(
+            n, names, genders, newbies, experts,
+            limits=limits, seed=int(seed) if seed else None,
+            strict_r=strict_r, strict_g=strict_g
+        )
         st.success(f"✅ Seed: {res.used_seed} | Попыток: {res.attempts}")
         if res.warnings: st.warning("⚠️ " + "; ".join(res.warnings))
         for i, g in enumerate(res.groups, 1):

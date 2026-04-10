@@ -16,13 +16,13 @@ DATA_KEY = "residents_data"
 WIDGET_KEY = "residents_widget"
 COLUMNS = ["Имя", "Пол", "Роль", "🚦 Статус"]
 
-# 🛡 1. Безопасная инициализация (без очистки на каждом ререндере)
-if DATA_KEY not in st.session_state or not isinstance(st.session_state[DATA_KEY], pd.DataFrame):
+# 🛡 1. Инициализация (гарантирует DataFrame)
+if DATA_KEY not in st.session_state or not isinstance(st.session_state.get(DATA_KEY), pd.DataFrame):
     st.session_state[DATA_KEY] = pd.DataFrame(columns=COLUMNS)
 
-# 🔄 2. Миграция старых ролей (срабатывает ровно 1 раз за сессию)
+# 🔄 2. Миграция ролей (1 раз)
 def migrate_roles():
-    df = st.session_state.get(DATA_KEY, pd.DataFrame(columns=COLUMNS))
+    df = st.session_state[DATA_KEY]
     if df.empty or "Роль" not in df.columns: return False
     if df["Роль"].isin(["regular", "expert", "newbie"]).any():
         df["Роль"] = df["Роль"].replace({"regular": "Обычный", "expert": "ВПИ", "newbie": "Новичок"})
@@ -33,13 +33,11 @@ def migrate_roles():
 
 if migrate_roles(): st.rerun()
 
-# 📖 Хелпер чтения данных (приоритет: Виджет -> Хранилище -> Пустая таблица)
+# 📖 Хелпер чтения (Виджет -> Хранилище -> Пустая)
 def get_current_df():
     if WIDGET_KEY in st.session_state and isinstance(st.session_state[WIDGET_KEY], pd.DataFrame):
         return st.session_state[WIDGET_KEY]
-    if DATA_KEY in st.session_state and isinstance(st.session_state[DATA_KEY], pd.DataFrame):
-        return st.session_state[DATA_KEY]
-    return pd.DataFrame(columns=COLUMNS)
+    return st.session_state.get(DATA_KEY, pd.DataFrame(columns=COLUMNS))
 
 # 3. Массовая вставка
 with st.expander("📋 Массовое добавление резидентов", expanded=True):
@@ -82,13 +80,13 @@ if "🚦 Статус" in current_df.columns:
     if not undetected.empty:
         st.warning(f"🔴 Проверьте вручную: {', '.join(undetected['Имя'])}")
 
-# 6. Таблица резидентов
+# 6. Таблица резидентов (СТАБИЛЬНЫЙ РЕЖИМ)
 st.subheader("📝 Резиденты")
-# Streamlit загрузит состояние из session_state[WIDGET_KEY] автоматически
-table_data = None if WIDGET_KEY in st.session_state else st.session_state[DATA_KEY]
 
-st.data_editor(
-    table_data,
+# Передаём копию, чтобы обойти StreamlitValueAssignmentNotAllowedError
+# Key гарантирует сохранение состояния между ререндерами
+editor_df = st.data_editor(
+    st.session_state[DATA_KEY].copy(),
     key=WIDGET_KEY,
     column_config={
         "Имя": st.column_config.TextColumn("Имя", required=True),
@@ -121,7 +119,8 @@ st.markdown("---")
 run = st.button("🚀 РАСПРЕДЕЛИТЬ!", type="primary", width="stretch")
 
 if run:
-    df = get_current_df()
+    # Берём актуальное состояние напрямую из виджета
+    df = editor_df
     if "Имя" not in df.columns or df.empty:
         st.error("Таблица пуста. Добавьте резидентов.")
         st.stop()
@@ -170,3 +169,4 @@ if run:
             
     except Exception as e:
         st.error(f"❌ {e}")
+    st.stop() # ✅ Предотвращает лишний ререндер, который мог сбрасывать таблицу

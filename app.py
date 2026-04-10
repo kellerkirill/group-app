@@ -237,19 +237,17 @@ st.title("🔥 РАСХОДИМСЯ ПО ГРУППАМ!")
 
 TABLE_KEY = "residents_table"
 COLUMNS = ["Имя", "Пол", "Роль", "🚦 Статус"]
-INITIAL_DF = pd.DataFrame(columns=COLUMNS)
 
-# Инициализация и миграция
+# Инициализация
 if TABLE_KEY not in st.session_state:
-    st.session_state[TABLE_KEY] = INITIAL_DF.copy()
+    st.session_state[TABLE_KEY] = pd.DataFrame(columns=COLUMNS)
 else:
-    # Миграция старых ролей (вызывает один ререндер при необходимости)
+    # Миграция старых ролей (только при первом запуске новой версии)
     df = st.session_state[TABLE_KEY]
-    if not df.empty and "Роль" in df.columns:
-        if df["Роль"].isin(["regular", "expert", "newbie"]).any():
-            df["Роль"] = df["Роль"].replace({"regular": "Обычный", "expert": "ВПИ", "newbie": "Новичок"})
-            st.session_state[TABLE_KEY] = df
-            st.rerun()
+    if not df.empty and "Роль" in df.columns and df["Роль"].isin(["regular", "expert", "newbie"]).any():
+        df["Роль"] = df["Роль"].replace({"regular": "Обычный", "expert": "ВПИ", "newbie": "Новичок"})
+        st.session_state[TABLE_KEY] = df
+        st.rerun()
 
 # 📋 Массовая вставка
 with st.expander("📋 Массовое добавление резидентов", expanded=True):
@@ -290,12 +288,15 @@ if "🚦 Статус" in current_df.columns:
     if not undetected.empty:
         st.warning(f"🔴 Проверьте вручную: {', '.join(undetected['Имя'])}")
 
-# 📝 Таблица резидентов (Ключевое исправление)
+# 📝 Таблица резидентов
 st.subheader("📝 Резиденты")
-# Передаём пустой шаблон, чтобы обойти проверку политик.
-# Виджет загрузит данные из st.session_state[TABLE_KEY] благодаря key=
+
+# 🔑 КРИТИЧЕСКИЙ ФИКС: Streamlit 1.30+ запрещает передавать DataFrame в data, если key уже существует.
+# Передаём None, если ключ есть в сессии. Виджет сам подтянет данные по key.
+editor_data = None if TABLE_KEY in st.session_state else st.session_state[TABLE_KEY]
+
 st.data_editor(
-    INITIAL_DF.copy(), 
+    editor_data,
     column_config={
         "Имя": st.column_config.TextColumn("Имя", required=True),
         "Пол": st.column_config.SelectboxColumn("Пол", options=["M", "F"], required=True, default="M"),
@@ -307,6 +308,7 @@ st.data_editor(
     num_rows="dynamic",
     key=TABLE_KEY
 )
+# ⛔ Ручная синхронизация УБРАНА. Виджет сам пишет в st.session_state[TABLE_KEY]
 
 # 🌍 Границы
 st.subheader("🌍 Границы")
@@ -328,7 +330,6 @@ st.markdown("---")
 run = st.button("🚀 РАСПРЕДЕЛИТЬ!", type="primary", use_container_width=True)
 
 if run:
-    # Читаем данные напрямую из сессии (виджет сам их туда сохранил)
     df = st.session_state.get(TABLE_KEY, pd.DataFrame())
     valid_df = df.dropna(subset=["Имя"])
     if valid_df.empty:
@@ -361,7 +362,7 @@ if run:
             st.subheader(f"Группа {i} ({len(g)} чел.)")
             st.write(", ".join(g))
             
-        # 📥 Экспорт в Excel
+        # 📥 Экспорт в Excel (каждая группа - столбец, резиденты - строки)
         if res.groups:
             max_len = max(len(g) for g in res.groups)
             export_data = {}

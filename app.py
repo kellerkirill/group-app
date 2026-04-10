@@ -230,7 +230,7 @@ def detect_gender(name: str) -> str:
     return _RU_NAMES.get(first, 'M')
 
 # ========================
-# STREAMLIT UI (ИСПРАВЛЕННЫЙ)
+# STREAMLIT UI (BULLETPROOF)
 # ========================
 st.set_page_config(page_title="РАСХОДИМСЯ ПО ГРУППАМ!", layout="wide")
 st.title("🔥 РАСХОДИМСЯ ПО ГРУППАМ!")
@@ -238,11 +238,11 @@ st.title("🔥 РАСХОДИМСЯ ПО ГРУППАМ!")
 TABLE_KEY = "residents_table"
 COLUMNS = ["Имя", "Пол", "Роль", "🚦 Статус"]
 
-# 1. Инициализация таблицы
+# 1. Инициализация
 if TABLE_KEY not in st.session_state:
     st.session_state[TABLE_KEY] = pd.DataFrame(columns=COLUMNS)
 else:
-    # Миграция старых ролей (срабатывает 1 раз)
+    # Миграция старых ролей (идемпотентная)
     df = st.session_state[TABLE_KEY]
     if not df.empty and "Роль" in df.columns and df["Роль"].isin(["regular", "expert", "newbie"]).any():
         df["Роль"] = df["Роль"].replace({"regular": "Обычный", "expert": "ВПИ", "newbie": "Новичок"})
@@ -288,11 +288,11 @@ if "🚦 Статус" in current_df.columns:
     if not undetected.empty:
         st.warning(f"🔴 Проверьте вручную: {', '.join(undetected['Имя'])}")
 
-# 5. Таблица резидентов
+# 5. Таблица резидентов (КРИТИЧЕСКИЙ ФИКС)
 st.subheader("📝 Резиденты")
-# Передаём None, если ключ уже есть. Виджет загрузит данные из session_state самостоятельно.
-# Это единственный способ обойти StreamlitValueAssignmentNotAllowedError в 1.30+
-table_data = None if TABLE_KEY in st.session_state else st.session_state[TABLE_KEY]
+
+# Streamlit 1.30+ требует строго None в data, если key уже в session_state
+table_data = st.session_state[TABLE_KEY].copy() if TABLE_KEY not in st.session_state else None
 
 st.data_editor(
     table_data,
@@ -307,6 +307,7 @@ st.data_editor(
     use_container_width=True,
     num_rows="dynamic"
 )
+# ⛔ Ручная синхронизация УБРАНА. Виджет сам управляет состоянием через key.
 
 # 6. Границы
 st.subheader("🌍 Границы")
@@ -323,12 +324,12 @@ with st.expander("⚙️ Настройки генерации"):
     strict_g = st.checkbox("Строгий баланс полов", value=True)
     seed = st.number_input("Seed (опционально)", value=None, step=1)
 
-# 8. Кнопка генерации
+# 8. Генерация
 st.markdown("---")
 run = st.button("🚀 РАСПРЕДЕЛИТЬ!", type="primary", use_container_width=True)
 
 if run:
-    # Читаем напрямую из ключа виджета (там хранятся все правки)
+    # Читаем напрямую из session_state (там хранятся все правки пользователя)
     df = st.session_state.get(TABLE_KEY, pd.DataFrame())
     valid_df = df.dropna(subset=["Имя"])
     if valid_df.empty:

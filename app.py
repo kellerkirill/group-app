@@ -16,16 +16,27 @@ DATA_KEY = "residents_data"
 WIDGET_KEY = "residents_widget"
 COLUMNS = ["Имя", "Пол", "Роль", "🚦 Статус"]
 
-# 🛡 Валидация состояния при старте (чистит битые сессии после деплоя)
-if DATA_KEY not in st.session_state or st.session_state[DATA_KEY].columns.tolist() != COLUMNS:
+# 🛡 1. Жёсткая валидация состояния (лечит dict/DataFrame конфликты)
+df_state = st.session_state.get(DATA_KEY)
+if not isinstance(df_state, pd.DataFrame) or df_state.columns.tolist() != COLUMNS:
     st.session_state[DATA_KEY] = pd.DataFrame(columns=COLUMNS)
+    if WIDGET_KEY in st.session_state: del st.session_state[WIDGET_KEY]
+    st.rerun()
+
+# Миграция старых ролей (выполняется 1 раз при первом запуске новой версии)
+df = st.session_state[DATA_KEY]
+if not df.empty and "Роль" in df.columns and df["Роль"].isin(["regular", "expert", "newbie"]).any():
+    df["Роль"] = df["Роль"].replace({"regular": "Обычный", "expert": "ВПИ", "newbie": "Новичок"})
+    st.session_state[DATA_KEY] = df
+    if WIDGET_KEY in st.session_state: del st.session_state[WIDGET_KEY]
+    st.rerun()
 
 # Хелпер с защитой от KeyError
 def get_current_df():
-    df = st.session_state.get(WIDGET_KEY, st.session_state.get(DATA_KEY, pd.DataFrame(columns=COLUMNS)))
-    if "Имя" not in df.columns:
-        return pd.DataFrame(columns=COLUMNS)
-    return df
+    raw = st.session_state.get(WIDGET_KEY) or st.session_state.get(DATA_KEY)
+    if isinstance(raw, pd.DataFrame) and "Имя" in raw.columns:
+        return raw
+    return pd.DataFrame(columns=COLUMNS)
 
 # 2. Массовая вставка
 with st.expander("📋 Массовое добавление резидентов", expanded=True):
